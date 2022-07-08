@@ -10,7 +10,7 @@ terraform {
 }
 
 provider "aws" {
-  region  = "us-east-2"
+  region  = "us-east-1"
 }
 locals {
   name   = "code-stuff"
@@ -19,7 +19,7 @@ locals {
     Environment = "dev"
     App = "API"
   }
-
+  environment = "dev"
   user_data = <<-EOT
   #!/bin/bash
   yum update -y aws-cfn-bootstrap
@@ -75,58 +75,29 @@ resource "aws_iam_role_policy_attachment" "AWSCodeDeployRole" {
 }
 
 resource "aws_codedeploy_app" "example" {
-  name = "API"
+    name             = "${local.name}"
+    compute_platform = "Server"
 }
 
-resource "aws_sns_topic" "example" {
-  name = "example-topic"
-}
 
-resource "aws_codedeploy_deployment_group" "example" {
+resource "aws_codedeploy_deployment_group" "deploy_group" {
   app_name              = aws_codedeploy_app.example.name
-  deployment_group_name = "example-group"
+  deployment_group_name = "${local.name}-DeploymentGroup${local.environment}"
   service_role_arn      = aws_iam_role.example.arn
-
-  ec2_tag_set {
-    ec2_tag_filter {
-      key   = "App"
-      type  = "KEY_AND_VALUE"
-      value = "API"
-    }
-
-    ec2_tag_filter {
-      key   = "Environment"
-      type  = "KEY_AND_VALUE"
-      value = "dev"
-    }
+  autoscaling_groups = ["${aws_autoscaling_group.autoscaling_group.name}"]
   }
 
-  trigger_configuration {
-    trigger_events     = ["DeploymentFailure"]
-    trigger_name       = "example-trigger"
-    trigger_target_arn = aws_sns_topic.example.arn
-  }
 
-  auto_rollback_configuration {
-    enabled = true
-    events  = ["DEPLOYMENT_FAILURE"]
-  }
-
-  alarm_configuration {
-    alarms  = ["my-alarm-name"]
-    enabled = true
-  }
-}
 resource "aws_default_vpc" "default" {
   tags = {
     Name = "Default VPC"
   }
 }
 resource "aws_default_subnet" "default_az1" {
-  availability_zone = "us-east-2a"
+  availability_zone = "us-east-1a"
 
   tags = {
-    Name = "Default subnet for us-east-2a"
+    Name = "Default subnet for us-east-1a"
   }
 }
 module "security_group" {
@@ -143,14 +114,24 @@ module "security_group" {
 
   tags = local.tags
 }
+data "aws_subnet" "subnet_1" {
+  vpc_id = aws_default_vpc.default.id
+
+  id = "subnet-02edba8757915bd1c"
+}
+data "aws_subnet" "subnet_2" {
+  vpc_id = aws_default_vpc.default.id
+  id = "subnet-084957adb65385567"
+}
 
 module "alb" {
   source  = "terraform-aws-modules/alb/aws"
   version = "7.0.0"
   name = "API"
-  subnets = aws_default_subnet.default_az1.id
+  subnets = [data.aws_subnet.subnet_1.id, data.aws_subnet.subnet_2.id]
   vpc_id = aws_default_vpc.default.id
   load_balancer_type = "application"
+  security_groups    = [module.security_group.security_group_id]
   http_tcp_listeners = [
     {
       port               = 80
@@ -166,48 +147,44 @@ module "alb" {
       target_type          = "instance"
       deregistration_delay = 10
       protocol_version = "HTTP1"
-      targets = {
-        my_ec2 = {
-          target_id = ec2-instance.id
-          port      = 80
-        }
-      }
       tags = {
         InstanceTargetGroupTag = "baz"
       }
     },
   ]
 }
-resource "aws_codedeploy_app" "example" {
-  compute_platform = "Server"
-  name             = "example"
+
+resource "aws_launch_configuration" "launch_configuration" {
+  instance_type = "t2.micro"
+  image_id =  data.aws_ami.amazon_linux.id
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+resource "aws_autoscaling_policy" "bat" {
+  name                   = "foobar3-terraform-test"
+  adjustment_type        = "ChangeInCapacity"
+  policy_type = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.autoscaling_group.name
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value = 50.0
+  }
 }
 
-module "ec2-instance" {
-  source  = "terraform-aws-modules/ec2-instance/aws"
-  version = "4.0.0"
-  associate_public_ip_address = false
-  availability_zone = aws_default_subnet.default_az1.availability_zone
-  capacity_reservation_specification = {
-    capacity_reservation_preference = "open"
-  }
-  cpu_core_count       = 1
-  cpu_threads_per_core = 1 
-  ami = data.aws_ami.amazon_linux.id
-  instance_type = "t2.micro"
-  disable_api_termination = false
-  ebs_optimized = true
-  enclave_options_enabled = false
-  get_password_data = false
-  hibernation = false
-  ipv6_address_count = 0
-  ipv6_addresses = []
-  key_name = "ssh-key"
-  subnet_id = aws_default_subnet.default_az1.id
-  tenancy = "default"
-  user_data_base64 = base64encode(local.user_data)  
-  vpc_security_group_ids = [module.security_group.security_group_id]
+resource "aws_autoscaling_group" "autoscaling_group" {
+  target_group_arns = module.alb.target_group_arns  
+  availability_zones = ["us-east-1a"]      
+  name_prefix = "${local.name}-AutoscalingGroup"
+  max_size                  = 5
+  min_size                  = 1
+  launch_configuration = "${aws_launch_configuration.launch_configuration.name}"
+  depends_on = [module.alb]
 }
+
 
 
 
