@@ -13,29 +13,18 @@ pipeline {
 	stages {
 		stage("Clone Source") {
 			steps {
-				git url: ''
+				git url: 'https://github.com/factorcore/code-excercise.git'
 			}
 		}
-				stage('Terraform Init') {
-			steps {
-				sh "cd tf/ && export TF_VAR_region='${env.aws_region}' && export TF_VAR_access_key='${env.access_key}' && export TF_VAR_secret_key='${env.secret_key}' && terraform init"
-			}
-		}
-		        stage ('Terraform Plan'){
-            steps {
-                sh "cd tf/ && export TF_VAR_region='${env.aws_region}' && export TF_VAR_access_key='${env.access_key}' && export TF_VAR_secret_key='${env.secret_key}' && terraform plan" 
-            }
-        }
-		stage ('Terraform Apply'){
-            steps {
-                sh "cd tf/ && export TF_VAR_region='${env.aws_region}' && export TF_VAR_access_key='${env.access_key}' && export TF_VAR_secret_key='${env.secret_key}' && terraform apply -auto-approve"
-            }
-        }
 		stage('pack and ship') {
+			environment {
+				AWS_ACCESS_KEY_ID     = credentials('jenkins-aws-secret-key-id')
+				AWS_SECRET_ACCESS_KEY = credentials('jenkins-aws-secret-access-key')
+   			 }
 			steps {
 				sh "mvn package"
 				sh "mv target/*.jar ../" 
-				step([$class: 'AWSCodeDeployPublisher', applicationName: '', awsAccessKey: '', awsSecretKey: '', credentials: 'awsAccessKey', deploymentGroupAppspec: false, deploymentGroupName: '', deploymentMethod: 'deploy', excludes: 'Jenkinsfile,mvnw, pom.xml, src/, target/, tf/', iamRoleArn: '', includes: '**', proxyHost: '', proxyPort: 0, region: 'us-east-2', s3bucket: 'api-releases', s3prefix: '', subdirectory: '', versionFileName: '', waitForCompletion: false])
+				step([$class: 'AWSCodeDeployPublisher', applicationName: 'API', awsAccessKey: $AWS_ACCESS_KEY_ID, awsSecretKey: $AWS_SECRET_ACCESS_KEY, credentials: 'awsAccessKey', deploymentGroupAppspec: false, deploymentGroupName: 'example-group', deploymentMethod: 'deploy', excludes: 'Jenkinsfile,mvnw, pom.xml, src/, target/, tf/', iamRoleArn: $ROLEARN, includes: '**', proxyHost: '', proxyPort: 0, region: 'us-east-2', s3bucket: $RELEASEBUCKET, s3prefix: '', subdirectory: '', versionFileName: $versionFileName, waitForCompletion: true])
 			}
 		}
     
