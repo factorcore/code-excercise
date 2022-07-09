@@ -11,7 +11,7 @@ pipeline {
 	}
 
 	stages {
-		stage("Clone Source") {
+		stage("Clone Sources") {
 			steps {
 				git url: 'https://github.com/factorcore/code-excercise.git'
 			}
